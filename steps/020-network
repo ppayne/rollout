@@ -39,12 +39,13 @@ options won't make your system inaccessable.
           '10.0.0.0/24' => undef,         # Route directly out this interface
         },
       },
-      'eth0:1' => {
+      'eth0,1' => { # adds another address to eth0, not a new interface
         family => 'inet6',
         method => 'static',
         ip => '2002:389:d010:7d00:251:9dff:fe6d:c60c',
         netmask => 64,
         gateway => '2002:389:d010:7d00',
+        auto => 0, # unnecessary as eth0 IPv4 will already auto eth0
       },
       eth1 => {
         disabled => 1, # This interface will be added but not enabled
@@ -248,7 +249,7 @@ validate_config {
         userctl => { type => "string" },
         vendor => { type => "string" },
       },
-      fail_on_unknown => 1,
+      fail_on_unknown => 0,
     },
   },
   resolver => {
@@ -383,7 +384,7 @@ elsif (i_should("interface") && -f "/etc/network/interfaces") {
   my %macs;
   while (my($device, $d) = each %ints) {
     my %x = (
-      _auto => $d->{disabled} ? 0 : 1,
+      _auto => exists($d->{auto}) ? $d->{auto} : ( $d->{disabled} ? 0 : 1 ),
       _addrfam => $d->{family} || 'inet',
       _method => $d->{dhcp} ? 'dhcp' : ($d->{method} || "static"),
       _mac => $d->{mac},
@@ -435,8 +436,11 @@ elsif (i_should("interface") && -f "/etc/network/interfaces") {
   if (keys %interfaces) {
     my $text = "# This file describes the network interfaces available on your system\n".
                "# and how to activate them. For more information, see interfaces(5).\n";
-    while (my($name, $int) = each %interfaces) {
+    foreach my $name ( sort keys %interfaces ) {
+      my $int = $interfaces{$name};
       next if $int->{_disabled};
+
+      $name =~ s/,.*$//; # if a comma is present, strip to the end
       $text .= "\n";
       $text .= "auto $name\n" if $int->{_auto};
       $text .= "iface $name $int->{_addrfam} $int->{_method}\n";
@@ -465,6 +469,7 @@ elsif (i_should("interface") && -f "/etc/network/interfaces") {
     }
 
     if (text_install("/etc/network/interfaces", $text)) {
+      v $text if ($safe_mode);
       $changes++;
       if (!$safe_mode) {
         w "Network configuration has been changed, you must restart the interfaces manually to ".

@@ -2,14 +2,14 @@
 # vim:tw=100 sw=2 expandtab ft=perl
 =head1 NAME
 
-950-iptables
+951-ip6tables
 
 =head1 DESCRIPTION
 
-Build and activate firewall rules, using iptables.
+Build and activate firewall rules, using ip6tables, the IPv6 version of iptables.
 
-This generates a file suitable for loading with C<iptables-restore>. The file contains a set of
-basic default rules that allow acceptable limits of ICMP, allow whatever is specified in the
+This generates a file suitable for loading with C<ip6tables-restore>. The file contains a set of
+basic default rules that allow acceptable limits of ICMPv6, allow whatever is specified in the
 C<firewall_accept> block, and reject anything else.
 
 Comments can be added by adding a hash character followed by the comment.
@@ -28,13 +28,18 @@ options won't make your system inaccessable.
     firewall_accept => [
       home => '22 # ssh',
       any => '80',
-      '192.168.1.0/24' => '53:udp # DNS',
+      '2001:4860:4860::/64' => '53:udp # DNS',
     ],
     firewall_drop => [
-      '192.168.1.10' => '53:udp',
-      '221.192.0.0/14' => 'any # China Unicom Hebei Province Network',
+      '2001:4860:4860::8888' => '53:udp',
+      '2001:E18::/32' => 'any # China Unicom Hebei Province Network',
     ],
   };
+
+Note that this block is shared with the iptables script so that any
+IPv4-specific addresses will be handled by that script and any
+IPv6-specific addresses will be handled by this script. Any generic
+rules related to a port will be handled by both scripts.
 
 =head1 SKIPPABLE STEPS
 
@@ -92,10 +97,10 @@ return unless (@accept || @drop || @append);
 if (i_distro("debian", "ubuntu")) {
   package_check("iptables");
   dir_check("/var/lib/iptables");
-  file_modify("/etc/default/iptables", undef,
+  file_modify("/etc/default/iptables6", undef,
               [ 's/enable_autosave=true/enable_autosave=false/',
                 's/enable_save_counters=true/enable_save_counters=false/' ])
-    if -f "/etc/default/iptables";
+    if -f "/etc/default/iptables6";
 }
 elsif (i_distro("redhat")) {
   package_check("iptables");
@@ -124,15 +129,15 @@ push @rules, (
   "-A INPUT -i tun+ -j ACCEPT",
   "-A INPUT -m state --state ESTABLISHED -j ACCEPT",
   "-A INPUT -m state --state RELATED -j ACCEPT",
-  "-A INPUT -p icmp -j icmp",
+  "-A INPUT -p icmpv6 -j icmp",
   "",
   "# chain icmp",
-  "-A icmp -p icmp --icmp-type echo-request -m comment --comment \"echo-request\"",
-  "-A icmp -p icmp --icmp-type echo-reply -m comment --comment \"echo-reply\"",
-  "-A icmp -p icmp --icmp-type destination-unreachable -m comment --comment \"destination-unreachable\"",
-  "-A icmp -p icmp --icmp-type time-exceeded -m comment --comment \"time-exceeded\"",
-  "-A icmp -p icmp -j ratelimit",
-  "-A icmp -p icmp -j ACCEPT",
+  "-A icmp -p icmpv6 --icmpv6-type echo-request -m comment --comment \"echo-request\"",
+  "-A icmp -p icmpv6 --icmpv6-type echo-reply -m comment --comment \"echo-reply\"",
+  "-A icmp -p icmpv6 --icmpv6-type destination-unreachable -m comment --comment \"destination-unreachable\"",
+  "-A icmp -p icmpv6 --icmpv6-type time-exceeded -m comment --comment \"time-exceeded\"",
+  "-A icmp -p icmpv6 -j ratelimit",
+  "-A icmp -p icmpv6 -j ACCEPT",
   "",
   "# chain ratelimit",
   "-A ratelimit -m limit --limit 5/second --limit-burst 20 -j RETURN",
@@ -143,23 +148,21 @@ push @rules, (
   "-A loganddrop -j DROP",
   "",
   "# chain logger (actually log event)",
-  "-A logger -j LOG --log-prefix \"iptables: \" --log-tcp-sequence --log-ip-options",
+  "-A logger -j LOG --log-prefix \"ip6tables: \" --log-tcp-sequence --log-ip-options",
   "-A logger -j RETURN",
-  "",
-  "-A INPUT -d 255.255.255.255 -j DROP -m comment --comment \"drop broadcast traffic\"",
   "",
   "# drop rules",
 );
 
 push @rules, "-A INPUT -p udp --sport bootps -j DROP" unless i_isa("Dhcp_Server");
 
-sub add_rules {
+sub add_6_rules {
   my $chain = shift;
   my $action = shift;
   for (my $i = 0; $i < @_; $i += 2) {
     my($source, $port) = ($_[$i], $_[$i + 1]);
-    if ($source =~ /:.*:/) {
-      next; # skip IPv6 specific addresses
+    if ($source =~ /(\d+)\.(\d+)\.(\d+)\.(\d+)/) {
+      next; # skip IPv4 specific addresses
     }
     if ($source =~ /^#/) {
       push @rules, $source;
@@ -187,20 +190,20 @@ sub add_rules {
     @hosts = (undef) unless @hosts;
     push @rules, "# $action $port from $source";
     foreach (@hosts) {
-      next if ( $_ && ( $_ =~ m/:.*:/ ) ); # skip IPv6 hosts
-      push @rules, "-A $chain". ($_ ? " -s $_" : ""). ($port eq 'any' ? "" : " -p $proto"). ($port eq 'any' ? "" : " --dport $port"). " -j $action". (length($comment) ? " -m comment --comment \"$comment\"" : "")
+      next if ( $_ && ( $_ =~ m/(\d+)\.(\d+)\.(\d+)\.(\d+)/ ) ); # skip IPv4 addresses
+      push @rules, "-A $chain". ($_ ? " -s $_" : ""). ($port eq 'any' ? "" : " -p $proto"). ($port eq 'any' ? "" : " --dport $port"). " -j $action". (length($comment) ? " -m comment --comment \"$comment\"" : "");
     }
   }
 }
 
-add_rules('inputdrop', 'DROP', @drop);
+add_6_rules('inputdrop', 'DROP', @drop);
 
 push @rules, (
   "",
   "# host specific rules",
   "-A INPUT -j inputdrop",
 );
-add_rules('INPUT', 'ACCEPT', @accept);
+add_6_rules('INPUT', 'ACCEPT', @accept);
 push @rules, @append;
 
 push @rules, (
@@ -209,7 +212,7 @@ push @rules, (
   "",
   "# safety rules, will never get called",
   "-A INPUT -p tcp -j REJECT --reject-with tcp-reset",
-  "-A INPUT -p udp -j REJECT --reject-with icmp-port-unreachable",
+  "-A INPUT -p udp -j REJECT --reject-with icmp6-port-unreachable",
   "-A INPUT -j REJECT",
   "",
   "# don't forward anything",
@@ -244,18 +247,18 @@ if (@mangle_append && i_should("firewall_mangle_append")) {
 my $changes = 0;
 my $text = join("", map { "$_\n" } @rules);
 if (i_distro("redhat")) {
-  text_install("/etc/sysconfig/iptables", $text,
-               "iptables-restore /etc/sysconfig/iptables") and $changes++;
+  text_install("/etc/sysconfig/iptables6", $text,
+               "ip6tables-restore /etc/sysconfig/ip6tables") and $changes++;
 } elsif (i_distro("debian", "ubuntu")) {
   dir_check("/var/lib/iptables");
-  text_install("/var/lib/iptables/active", $text,
-               "iptables-restore /var/lib/iptables/active") and $changes++;
+  text_install("/var/lib/iptables/active6", $text,
+               "ip6tables-restore /var/lib/iptables/active6") and $changes++;
 }
 
 if ($safe_mode && $changes) {
-  v "iptables active file would be changed to:";
+  v "ip6tables active file would be changed to:";
   v $text;
 
   w "Firewall config is considered dangerous, changes won't be applied unless you specify the ".
-    "\"-f iptables\" argument.";
+    "\"-f iptables6\" argument.";
 }
